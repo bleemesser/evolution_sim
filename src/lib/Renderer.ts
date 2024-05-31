@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import Stats from 'three/addons/libs/stats.module.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { Raycaster } from 'three/src/core/Raycaster.js';
 
 class SceneRenderer {
     private canvas: HTMLCanvasElement;
@@ -10,7 +11,7 @@ class SceneRenderer {
     private controller: OrbitControls;
     private scene: THREE.Scene;
     private stats = new Stats();
-    private floorSize = 20;
+    private floorSize = 5;
 
     private foodCollection: THREE.InstancedMesh | undefined;
     private creatureCollection: THREE.InstancedMesh | undefined;
@@ -81,6 +82,7 @@ class SceneRenderer {
         const wallGeometry = new THREE.BoxGeometry(this.floorSize, 10, this.floorSize);
         const wallMaterial = new THREE.MeshStandardMaterial({
             color: 'black',
+            // side: THREE.DoubleSide,
         });
         const wall = new THREE.Mesh(wallGeometry, wallMaterial);
         // make wall invisible
@@ -156,6 +158,7 @@ class SceneRenderer {
             const creatureMaterial = new THREE.MeshStandardMaterial({
                 color: 'deepskyblue',
             });
+
             const instancedCreature = new THREE.InstancedMesh(creature.geometry, creatureMaterial, count);
             instancedCreature.castShadow = true;
             instancedCreature.receiveShadow = true;
@@ -175,6 +178,7 @@ class SceneRenderer {
                 quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * this.PI2);
                 matrix.compose(position, quaternion, scale);
                 instancedCreature.setMatrixAt(i, matrix);
+                instancedCreature.instanceMatrix.needsUpdate = true;
             }
             this.creatureCollection = instancedCreature;
             this.scene.add(this.creatureCollection);
@@ -185,6 +189,10 @@ class SceneRenderer {
 
     }
     
+    private isInBounds(position: THREE.Vector3): boolean {
+        const halfSize = this.floorSize / 2;
+        return position.x > -halfSize && position.x < halfSize && position.z > -halfSize && position.z < halfSize;
+    }
 
     // private update function that contains the animations
     private update(delta: number) {
@@ -209,29 +217,72 @@ class SceneRenderer {
 
         // animate the creatures moving around and collecting food if they touch it
         if (this.creatureCollection && this.foodCollection) {
-            const matrix = new THREE.Matrix4();
-            const position = new THREE.Vector3();
-            const quaternion = new THREE.Quaternion();
-            const scale = new THREE.Vector3();
+            // const raycaster = new Raycaster();
+
+            var matrix = new THREE.Matrix4();
+            var position = new THREE.Vector3();
+            var quaternion = new THREE.Quaternion();
+            var scale = new THREE.Vector3();
+
             for (let i = 0; i < this.creatureCollection.count; i++) {
                 this.creatureCollection.getMatrixAt(i, matrix);
-                matrix.decompose(position, quaternion, scale);
-                
-                // choose a slightly randomized direction to move in, make it similar to the facing direction but as much as 90 degrees off
-                quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * this.PI2);
+                matrix.decompose(position, quaternion, scale);         
 
-                // have the creature move forward
-                position.x += Math.sin(quaternion.y)  * delta;
-                position.z += Math.cos(quaternion.y)  * delta;
+                // Calculate angle for wandering
+                const euler = new THREE.Euler();
+                euler.setFromQuaternion(quaternion);
+                // euler.y += Math.random() * this.PI2 * 0.25;
+                euler.x = 0;
+                euler.z = 0;
+                euler.y = euler.y % this.PI2;
 
-                
-                // recompose the matrix
+                // Move the creature
+                const speed = 0.03;
+                let dx = new THREE.Vector3(Math.cos(euler.y) * speed, 0, 0);
+                let dz = new THREE.Vector3(0, 0, Math.sin(euler.y) * speed);
+                let tempPosX = position.clone();
+                let tempPosZ = position.clone();
+                let bouncedX = false;
+                let bouncedZ = false;
+                if (this.isInBounds(tempPosX.add(dx))) {
+                    position.add(dx);
+                } else {
+                    dx.negate();
+                    position.add(dx);
+                    bouncedX = true;
+                }
+                if (this.isInBounds(tempPosZ.add(dz))) {
+                    position.add(dz);
+                } else {
+                    dz.negate();
+                    position.add(dz);
+                    bouncedZ = true;
+                }
+                if (bouncedX) {
+                    console.log("Changing angle from " + euler.y * 180/Math.PI + " to "); 
+                }
+                euler.y = Math.atan2(dz.z, dx.x);
+                if (bouncedX) {
+                    console.log(euler.y * 180/Math.PI);
+                }
+
+                const debugElement = document.getElementById('debugInfo') as HTMLElement;
+                debugElement.innerHTML = `
+                x: ${position.x.toFixed(2)}, z: ${position.z.toFixed(2)}, y: ${position.y.toFixed(2)}
+                <br>dx: ${dx.x.toFixed(2)}, dz: ${dz.z.toFixed(2)}
+                <br>angle: ${euler.y.toFixed(2)}
+                `;
+                        
+                quaternion.setFromEuler(euler);
+
+                // Recompose the matrix
                 matrix.compose(position, quaternion, scale);
                 this.creatureCollection.setMatrixAt(i, matrix);
-
             }
+        
             this.creatureCollection.instanceMatrix.needsUpdate = true;
         }
+        
     }
 
     // public render function to render the scene
@@ -251,15 +302,9 @@ class SceneRenderer {
             n++;
 
             requestAnimationFrame(tick);
-
         }
-
         tick();
-        
-        
-
     }
-    
 }
 
 export default SceneRenderer;

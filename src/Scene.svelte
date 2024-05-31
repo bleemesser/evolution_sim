@@ -8,8 +8,8 @@
 
   onMount(() => {
     const scene = new SceneRenderer(sceneCanvas);
-    scene.spawnFood(30);
-    scene.spawnCreatures(2);
+    scene.spawnFood(1);
+    scene.spawnCreatures(1);
     scene.render();
   });
 
@@ -17,6 +17,7 @@
 
 <main>
   <canvas id="sceneCanvas" bind:this={sceneCanvas} />
+  <p id="debugInfo">aasfasflaksjfa;sldfja;ldkj</p>
 </main>
 
  
