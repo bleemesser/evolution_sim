@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import Stats from 'three/addons/libs/stats.module.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { Raycaster } from 'three/src/core/Raycaster.js';
+// import { Raycaster } from 'three/src/core/Raycaster.js';
 
 class SceneRenderer {
     private canvas: HTMLCanvasElement;
@@ -11,11 +11,16 @@ class SceneRenderer {
     private controller: OrbitControls;
     private scene: THREE.Scene;
     private stats = new Stats();
-    private floorSize = 5;
+    private floorSize = 20;
 
     private foodCollection: THREE.InstancedMesh | undefined;
     private creatureCollection: THREE.InstancedMesh | undefined;
     private wall: THREE.Mesh | undefined;
+
+    private foodPositions: THREE.Vector3[] = new Array();
+
+    private debugSphere = new THREE.Mesh(new THREE.SphereGeometry(0.1, 32, 32), new THREE.MeshStandardMaterial({ color: 'yellow' }));
+    private debugRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.05, 32), new THREE.MeshStandardMaterial({ color: 'blue', transparent: false, opacity: 0.5}));
 
     private readonly PI2 = Math.PI * 2;
 
@@ -76,8 +81,7 @@ class SceneRenderer {
         const ground = new THREE.Mesh(geometry, groundMaterial);
         ground.receiveShadow = true;
         ground.position.y = -0.05;
-        this.scene.add(ground);
-    
+        this.scene.add(ground);  
 
         const wallGeometry = new THREE.BoxGeometry(this.floorSize, 10, this.floorSize);
         const wallMaterial = new THREE.MeshStandardMaterial({
@@ -95,6 +99,8 @@ class SceneRenderer {
         this.wall = wall;
         this.scene.add(this.wall);
 
+        this.scene.add(this.debugSphere);
+        this.scene.add(this.debugRing);
 
         // add directional light
         const light = new THREE.DirectionalLight(0xffffff, 2.5);
@@ -130,17 +136,17 @@ class SceneRenderer {
         food.receiveShadow = true;
         food.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
-        const matrix = new THREE.Matrix4();
-        const position = new THREE.Vector3();
-        const quaternion = new THREE.Quaternion();
-        const scale = new THREE.Vector3();
+        let matrix = new THREE.Matrix4();
+        let position = new THREE.Vector3();
+        let quaternion = new THREE.Quaternion();
+        let scale = new THREE.Vector3();
         for (let i = 0; i < count; i++) {
             position.set(
                 (Math.random() - 0.5) * this.floorSize,
                 0.2,
                 (Math.random() - 0.5) * this.floorSize
             );
-            // can ignore the quaternion food is a sphere
+            this.foodPositions.push(position.clone()); // VERY important to clone the position otherwise it will be a reference
             scale.set(1, 1, 1);
             matrix.compose(position, quaternion, scale);
             food.setMatrixAt(i, matrix);
@@ -163,6 +169,7 @@ class SceneRenderer {
             instancedCreature.castShadow = true;
             instancedCreature.receiveShadow = true;
             instancedCreature.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            instancedCreature.userData = { facings: new Array(count).fill(0), creatureInfo: new Array(count)};
 
             const matrix = new THREE.Matrix4();
             const position = new THREE.Vector3();
@@ -175,7 +182,18 @@ class SceneRenderer {
                     (Math.random() - 0.5) * this.floorSize
                 );
                 scale.set(0.01, 0.01, 0.01);
-                quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * this.PI2);
+                instancedCreature.userData.facings[i] = Math.random() * this.PI2;
+                instancedCreature.userData.creatureInfo[i] = { 
+                    speed: Math.random() * 0.1 + 0.01,
+                    viewRadius: Math.random() * 2 + 1,
+
+                    isTargetingFood: false,
+                    willSurvive: false,
+                    willReproduce: false,
+                    age: 0,
+
+                 };
+
                 matrix.compose(position, quaternion, scale);
                 instancedCreature.setMatrixAt(i, matrix);
                 instancedCreature.instanceMatrix.needsUpdate = true;
@@ -188,11 +206,6 @@ class SceneRenderer {
         });
 
     }
-    
-    private isInBounds(position: THREE.Vector3): boolean {
-        const halfSize = this.floorSize / 2;
-        return position.x > -halfSize && position.x < halfSize && position.z > -halfSize && position.z < halfSize;
-    }
 
     // private update function that contains the animations
     private update(delta: number) {
@@ -201,10 +214,10 @@ class SceneRenderer {
 
         // animate the food hovering up and down in a sine wave
         if (this.foodCollection) {
-            const matrix = new THREE.Matrix4();
-            const position = new THREE.Vector3();
-            const quaternion = new THREE.Quaternion();
-            const scale = new THREE.Vector3();
+            let matrix = new THREE.Matrix4();
+            let position = new THREE.Vector3();
+            let quaternion = new THREE.Quaternion();
+            let scale = new THREE.Vector3();
             for (let i = 0; i < this.foodCollection.count; i++) {
                 this.foodCollection.getMatrixAt(i, matrix);
                 matrix.decompose(position, quaternion, scale);
@@ -217,63 +230,113 @@ class SceneRenderer {
 
         // animate the creatures moving around and collecting food if they touch it
         if (this.creatureCollection && this.foodCollection) {
-            // const raycaster = new Raycaster();
 
-            var matrix = new THREE.Matrix4();
-            var position = new THREE.Vector3();
-            var quaternion = new THREE.Quaternion();
-            var scale = new THREE.Vector3();
+            let matrix = new THREE.Matrix4();
+            let position = new THREE.Vector3();
+            let quaternion = new THREE.Quaternion();
+            let scale = new THREE.Vector3();
 
             for (let i = 0; i < this.creatureCollection.count; i++) {
                 this.creatureCollection.getMatrixAt(i, matrix);
                 matrix.decompose(position, quaternion, scale);         
 
-                // Calculate angle for wandering
-                const euler = new THREE.Euler();
-                euler.setFromQuaternion(quaternion);
-                // euler.y += Math.random() * this.PI2 * 0.25;
-                euler.x = 0;
-                euler.z = 0;
-                euler.y = euler.y % this.PI2;
+                // Get creature facing and info
+                let facing = this.creatureCollection.userData.facings[i];
+                let creatureInfo = this.creatureCollection.userData.creatureInfo[i];
 
-                // Move the creature
-                const speed = 0.03;
-                let dx = new THREE.Vector3(Math.cos(euler.y) * speed, 0, 0);
-                let dz = new THREE.Vector3(0, 0, Math.sin(euler.y) * speed);
+                // Check for collisions with walls and move the creature
+                const speed = creatureInfo.speed;
+                let dx = new THREE.Vector3(Math.cos(facing) * speed, 0, 0);
+                let dz = new THREE.Vector3(0, 0, Math.sin(facing) * speed);
                 let tempPosX = position.clone();
                 let tempPosZ = position.clone();
-                let bouncedX = false;
-                let bouncedZ = false;
-                if (this.isInBounds(tempPosX.add(dx))) {
-                    position.add(dx);
-                } else {
-                    dx.negate();
-                    position.add(dx);
-                    bouncedX = true;
+
+                tempPosX.add(dx);
+                tempPosZ.add(dz);
+                if (tempPosX.x < -this.floorSize / 2 || tempPosX.x > this.floorSize / 2) {
+                    dx.x = -dx.x;
+                    facing = Math.PI - facing;
+                } else if (tempPosZ.z < -this.floorSize / 2 || tempPosZ.z > this.floorSize / 2) {
+                    dz.z = -dz.z;
+                    facing = -facing;
                 }
-                if (this.isInBounds(tempPosZ.add(dz))) {
-                    position.add(dz);
-                } else {
-                    dz.negate();
-                    position.add(dz);
-                    bouncedZ = true;
+                position.add(dx);
+                position.add(dz); 
+
+                // add some randomnes to the creature's movement
+                if (Math.random() < 0.1 && !creatureInfo.isTargetingFood) {
+                    facing += Math.PI / 4 * (Math.random() - 0.5);
                 }
-                if (bouncedX) {
-                    console.log("Changing angle from " + euler.y * 180/Math.PI + " to "); 
+
+                // Target food and eat it
+                // use filter to find food in view radius
+                const foodInView = this.foodPositions.filter((foodPosition) => {
+                    return position.distanceTo(foodPosition) < creatureInfo.viewRadius;
+                });
+
+                console.log(foodInView)
+
+                // if there is food in view, target the closest one
+                if (foodInView.length > 0) {
+                    const closestFood = foodInView.reduce((prev, curr) => {
+                        return position.distanceTo(curr) < position.distanceTo(prev) ? curr : prev;
+                    });
+                    creatureInfo.isTargetingFood = true;
+                    facing = Math.atan2(closestFood.z - position.z, closestFood.x - position.x);
+
+                    if (position.distanceTo(closestFood) <= 0.5) {
+                        // eat the food (put it very very far away)
+                        let index = this.foodPositions.indexOf(closestFood);
+                        let matrix = new THREE.Matrix4();
+                        let position = new THREE.Vector3();
+                        let quaternion = new THREE.Quaternion();
+                        let scale = new THREE.Vector3();
+                        this.foodCollection.getMatrixAt(index, matrix);
+                        matrix.decompose(position, quaternion, scale);
+                        position.set(100, 100, 100);
+                        matrix.compose(position, quaternion, scale);
+                        this.foodCollection.setMatrixAt(index, matrix);
+                        this.foodCollection.instanceMatrix.needsUpdate = true;
+
+                        // remove the food from the foodPositions array
+                        this.foodPositions.splice(index, 1);
+                        creatureInfo.isTargetingFood = false;
+                    }
                 }
-                euler.y = Math.atan2(dz.z, dx.x);
-                if (bouncedX) {
-                    console.log(euler.y * 180/Math.PI);
-                }
+
+                
+                
+                // Update facing angle
+                this.creatureCollection.userData.facings[i] = facing;
+                this.creatureCollection.userData.creatureInfo[i] = creatureInfo;
 
                 const debugElement = document.getElementById('debugInfo') as HTMLElement;
                 debugElement.innerHTML = `
                 x: ${position.x.toFixed(2)}, z: ${position.z.toFixed(2)}, y: ${position.y.toFixed(2)}
                 <br>dx: ${dx.x.toFixed(2)}, dz: ${dz.z.toFixed(2)}
-                <br>angle: ${euler.y.toFixed(2)}
+                <br>angle: ${facing.toFixed(2) * 180/Math.PI}
+                <br>food left: ${this.foodPositions.length}
                 `;
-                        
-                quaternion.setFromEuler(euler);
+
+                // set debug sphere position to radius of 1 in front of creature's facing direction
+                const debugRadius = 0.5;
+                const debugPosition = new THREE.Vector3(
+                    position.x + Math.cos(facing) * debugRadius,
+                    0.6,
+                    position.z + Math.sin(facing) * debugRadius
+                );
+                if (creatureInfo.isTargetingFood) {
+                    this.debugSphere.material.color.set('green');
+                }
+                this.debugSphere.position.copy(debugPosition);
+                
+                // set debug ring to creature's position, with radius of view radius
+                this.debugRing.position.copy(position);
+                this.debugRing.position.y = 0.6;
+                this.debugRing.rotation.x = -Math.PI / 2;
+                this.debugRing.scale.set(creatureInfo.viewRadius, creatureInfo.viewRadius, 1);
+
+
 
                 // Recompose the matrix
                 matrix.compose(position, quaternion, scale);

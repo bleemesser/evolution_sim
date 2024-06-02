@@ -8,8 +8,8 @@
 
   onMount(() => {
     const scene = new SceneRenderer(sceneCanvas);
-    scene.spawnFood(1);
-    scene.spawnCreatures(1);
+    scene.spawnFood(10);
+    scene.spawnCreatures(10);
     scene.render();
   });
 
