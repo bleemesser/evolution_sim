@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import Stats from 'three/addons/libs/stats.module.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-// import { Raycaster } from 'three/src/core/Raycaster.js';
+import { Raycaster } from 'three/src/core/Raycaster.js';
 
 class SceneRenderer {
     private canvas: HTMLCanvasElement;
@@ -11,18 +11,22 @@ class SceneRenderer {
     private controller: OrbitControls;
     private scene: THREE.Scene;
     private stats = new Stats();
-    private floorSize = 20;
+    private floorSize = 15;
+    private foodCount = 20;
 
-    private foodCollection: THREE.InstancedMesh | undefined;
+    // private foodCollection: THREE.InstancedMesh | undefined;
     private creatureCollection: THREE.InstancedMesh | undefined;
     private wall: THREE.Mesh | undefined;
 
     private foodPositions: THREE.Vector3[] = new Array();
+    private foodMeshes: THREE.Mesh[] = new Array();
 
     private debugSphere = new THREE.Mesh(new THREE.SphereGeometry(0.1, 32, 32), new THREE.MeshStandardMaterial({ color: 'yellow' }));
     private debugRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.05, 32), new THREE.MeshStandardMaterial({ color: 'blue', transparent: false, opacity: 0.5}));
 
     private readonly PI2 = Math.PI * 2;
+
+    private raycaster = new Raycaster();
 
     private get aspectRatio(): number {
         return this.canvas.width / this.canvas.height;
@@ -68,12 +72,18 @@ class SceneRenderer {
 
         this.renderer.setSize(this.canvas.width, this.canvas.height);
         window.addEventListener('resize', this.onResize.bind(this));
-        this.init();
     }
 
+    public reset() {
+        if (this.creatureCollection) {
+            this.scene.remove(this.creatureCollection);
+        }
+        this.scene.children = [];
+    }
 
     // init function to create geometry and add it to the scene
-    private init() {
+    public init(floorSize = 15) {
+        this.floorSize = floorSize;
         const geometry = new THREE.BoxGeometry(this.floorSize, 0.1, this.floorSize);
         const groundMaterial = new THREE.MeshStandardMaterial({
             color: '#90EE90',
@@ -99,8 +109,8 @@ class SceneRenderer {
         this.wall = wall;
         this.scene.add(this.wall);
 
-        this.scene.add(this.debugSphere);
-        this.scene.add(this.debugRing);
+        // this.scene.add(this.debugSphere);
+        // this.scene.add(this.debugRing);
 
         // add directional light
         const light = new THREE.DirectionalLight(0xffffff, 2.5);
@@ -124,39 +134,32 @@ class SceneRenderer {
         this.camera.position.y = 15;
     }
 
+
     public spawnFood(count: number): void {
+        this.foodCount = count;
         // spawn a bunch of spheres in random positions on the ground
         const geometry = new THREE.SphereGeometry(0.2, 32, 32);
         const material = new THREE.MeshStandardMaterial({
             color: 'red',
         });
-        // instancedmesh
-        const food = new THREE.InstancedMesh(geometry, material, count);
-        food.castShadow = true;
-        food.receiveShadow = true;
-        food.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
-        let matrix = new THREE.Matrix4();
-        let position = new THREE.Vector3();
-        let quaternion = new THREE.Quaternion();
-        let scale = new THREE.Vector3();
         for (let i = 0; i < count; i++) {
-            position.set(
+            const food = new THREE.Mesh(geometry, material);
+            food.castShadow = true;
+            food.receiveShadow = true;
+            food.position.set(
                 (Math.random() - 0.5) * this.floorSize,
                 0.2,
                 (Math.random() - 0.5) * this.floorSize
             );
-            this.foodPositions.push(position.clone()); // VERY important to clone the position otherwise it will be a reference
-            scale.set(1, 1, 1);
-            matrix.compose(position, quaternion, scale);
-            food.setMatrixAt(i, matrix);
+            this.foodPositions.push(food.position.clone());
+            this.foodMeshes.push(food);
+            this.scene.add(food);
         }
-        this.foodCollection = food;
-        this.scene.add(this.foodCollection);
 
     }
 
-    public spawnCreatures(count: number): void {
+    public spawnCreatures(count: number, facings?: number[], positions?: THREE.Vector3[], creatureInfos?: any[]): void {
         const loader = new GLTFLoader();
         // instanced mesh load the gltf model
         loader.load('/src/assets/blob.gltf', (gltf) => {
@@ -176,23 +179,33 @@ class SceneRenderer {
             const quaternion = new THREE.Quaternion();
             const scale = new THREE.Vector3();
             for (let i = 0; i < count; i++) {
-                position.set(
-                    (Math.random() - 0.5) * this.floorSize,
-                    -0.05,
-                    (Math.random() - 0.5) * this.floorSize
-                );
-                scale.set(0.01, 0.01, 0.01);
-                instancedCreature.userData.facings[i] = Math.random() * this.PI2;
-                instancedCreature.userData.creatureInfo[i] = { 
-                    speed: Math.random() * 0.1 + 0.01,
-                    viewRadius: Math.random() * 2 + 1,
+                if (facings && positions && creatureInfos) {
+                    position.copy(positions[i]);
+                    scale.set(0.01, 0.01, 0.01);
+                    instancedCreature.userData.facings[i] = facings[i];
+                    instancedCreature.userData.creatureInfo[i] = creatureInfos[i];
+                } else {
+                    position.set(
+                        (Math.random() - 0.5) * this.floorSize,
+                        -0.05,
+                        (Math.random() - 0.5) * this.floorSize
+                    );
+                    scale.set(0.01, 0.01, 0.01);
+                    instancedCreature.userData.facings[i] = Math.random() * this.PI2;
+                    let newSpeed = Math.random() * 0.1 + 0.01;
+                    let newViewRadius = Math.random() * 2 + 1;
+                    instancedCreature.userData.creatureInfo[i] = { 
+                        speed: newSpeed,
+                        viewRadius: newViewRadius,
+                        isTargetingFood: false,
+                        willSurvive: false,
+                        willReproduce: false,
+                        requiredReproductionFood: Math.floor(10 * newSpeed + newViewRadius * 2),
+                        eatenFood: 0,
+                        age: 0,
 
-                    isTargetingFood: false,
-                    willSurvive: false,
-                    willReproduce: false,
-                    age: 0,
-
-                 };
+                    };
+                }
 
                 matrix.compose(position, quaternion, scale);
                 instancedCreature.setMatrixAt(i, matrix);
@@ -212,24 +225,59 @@ class SceneRenderer {
         this.controller.update();
         this.stats.update();
 
-        // animate the food hovering up and down in a sine wave
-        if (this.foodCollection) {
-            let matrix = new THREE.Matrix4();
-            let position = new THREE.Vector3();
-            let quaternion = new THREE.Quaternion();
-            let scale = new THREE.Vector3();
-            for (let i = 0; i < this.foodCollection.count; i++) {
-                this.foodCollection.getMatrixAt(i, matrix);
-                matrix.decompose(position, quaternion, scale);
-                position.y = Math.sin(Date.now() * 0.005 + i) * 0.05 + 0.2;
-                matrix.compose(position, quaternion, scale);
-                this.foodCollection.setMatrixAt(i, matrix);
-            }
-            this.foodCollection.instanceMatrix.needsUpdate = true;
-        }
-
         // animate the creatures moving around and collecting food if they touch it
-        if (this.creatureCollection && this.foodCollection) {
+        if (this.creatureCollection) {
+            if (this.foodPositions.length === 0) {
+                // once there is no food left, the day is over. save the positions and facings of the creatures that will survive
+                // and spawn all surviving creatures again by deleting the old ones and creating new ones with the saved positions and facings
+                const survivingCreatures = [];
+                for (let i = 0; i < this.creatureCollection.count; i++) {
+                    let creatureInfo = this.creatureCollection.userData.creatureInfo[i];
+                    if (creatureInfo.willSurvive) {
+                        creatureInfo.age += 1;
+                        creatureInfo.willSurvive = false;
+                        let position = new THREE.Vector3();
+                        let quaternion = new THREE.Quaternion();
+                        let scale = new THREE.Vector3();
+                        let matrix = new THREE.Matrix4();
+                        this.creatureCollection.getMatrixAt(i, matrix);
+                        matrix.decompose(position, quaternion, scale);
+                        survivingCreatures.push({ position, facing: this.creatureCollection.userData.facings[i], creatureInfo });
+
+                        if (creatureInfo.willReproduce) {
+                            // create a new creature with a random position and facing, but similar stats
+                            let newPosition = new THREE.Vector3(
+                                (Math.random() - 0.5) * this.floorSize,
+                                -0.05,
+                                (Math.random() - 0.5) * this.floorSize
+                            );
+                            let newFacing = Math.random() * this.PI2;
+                            let newCreatureInfo = {
+                                speed: creatureInfo.speed + (Math.random() - 0.5) * 0.01,
+                                viewRadius: creatureInfo.viewRadius + (Math.random() - 0.5) * 0.5,
+                                isTargetingFood: false,
+                                willSurvive: false,
+                                willReproduce: false,
+                                requiredReproductionFood: Math.floor(10 * creatureInfo.speed + creatureInfo.viewRadius * 2),
+                                eatenFood: 0,
+                                age: 0,
+                            };
+                            survivingCreatures.push({ position: newPosition, facing: newFacing, creatureInfo: newCreatureInfo });
+                        }
+                    }
+                }
+
+                // spawn new creatures
+                this.scene.remove(this.creatureCollection);
+                this.spawnCreatures(survivingCreatures.length, 
+                    survivingCreatures.map((creature: { facing: any; }) => creature.facing),
+                    survivingCreatures.map((creature: { position: any; }) => creature.position),
+                    survivingCreatures.map((creature: { creatureInfo: any; }) => creature.creatureInfo),
+                );
+
+                // spawn food again
+                this.spawnFood(this.foodCount);
+            }
 
             let matrix = new THREE.Matrix4();
             let position = new THREE.Vector3();
@@ -245,7 +293,7 @@ class SceneRenderer {
                 let creatureInfo = this.creatureCollection.userData.creatureInfo[i];
 
                 // Check for collisions with walls and move the creature
-                const speed = creatureInfo.speed;
+                const speed = creatureInfo.speed * 80 * delta;
                 let dx = new THREE.Vector3(Math.cos(facing) * speed, 0, 0);
                 let dz = new THREE.Vector3(0, 0, Math.sin(facing) * speed);
                 let tempPosX = position.clone();
@@ -274,8 +322,6 @@ class SceneRenderer {
                     return position.distanceTo(foodPosition) < creatureInfo.viewRadius;
                 });
 
-                console.log(foodInView)
-
                 // if there is food in view, target the closest one
                 if (foodInView.length > 0) {
                     const closestFood = foodInView.reduce((prev, curr) => {
@@ -285,23 +331,25 @@ class SceneRenderer {
                     facing = Math.atan2(closestFood.z - position.z, closestFood.x - position.x);
 
                     if (position.distanceTo(closestFood) <= 0.5) {
-                        // eat the food (put it very very far away)
-                        let index = this.foodPositions.indexOf(closestFood);
-                        let matrix = new THREE.Matrix4();
-                        let position = new THREE.Vector3();
-                        let quaternion = new THREE.Quaternion();
-                        let scale = new THREE.Vector3();
-                        this.foodCollection.getMatrixAt(index, matrix);
-                        matrix.decompose(position, quaternion, scale);
-                        position.set(100, 100, 100);
-                        matrix.compose(position, quaternion, scale);
-                        this.foodCollection.setMatrixAt(index, matrix);
-                        this.foodCollection.instanceMatrix.needsUpdate = true;
+                        let index = this.foodPositions.findIndex((foodPosition) => foodPosition === closestFood);
+
+                        let foodMesh = this.foodMeshes[index];
+                        if (foodMesh) {
+                            this.scene.remove(foodMesh);
+                            this.foodMeshes.splice(index, 1); // Remove the food mesh from the array
+                        }
 
                         // remove the food from the foodPositions array
                         this.foodPositions.splice(index, 1);
                         creatureInfo.isTargetingFood = false;
+                        creatureInfo.willSurvive = true;
+                        creatureInfo.eatenFood += 1;
+                        if (creatureInfo.eatenFood >= creatureInfo.requiredReproductionFood) {
+                            creatureInfo.willReproduce = true;
+                        }
                     }
+                } else {
+                    creatureInfo.isTargetingFood = false;
                 }
 
                 
@@ -312,10 +360,13 @@ class SceneRenderer {
 
                 const debugElement = document.getElementById('debugInfo') as HTMLElement;
                 debugElement.innerHTML = `
-                x: ${position.x.toFixed(2)}, z: ${position.z.toFixed(2)}, y: ${position.y.toFixed(2)}
-                <br>dx: ${dx.x.toFixed(2)}, dz: ${dz.z.toFixed(2)}
-                <br>angle: ${facing.toFixed(2) * 180/Math.PI}
-                <br>food left: ${this.foodPositions.length}
+                food left: ${this.foodPositions.length}
+                <br>creatures surviving: ${this.creatureCollection.userData.creatureInfo.filter((info: { willSurvive: any; }) => info.willSurvive).length} / ${this.creatureCollection.count}
+                <br>creatures reproducing: ${this.creatureCollection.userData.creatureInfo.filter((info: { willReproduce: any; }) => info.willReproduce).length}
+                <br>average age: ${(this.creatureCollection.userData.creatureInfo.reduce((prev: any, curr: { age: any; }) => prev + curr.age, 0) / this.creatureCollection.count).toFixed(2)}
+                <br>average speed: ${(this.creatureCollection.userData.creatureInfo.reduce((prev: any, curr: { speed: any; }) => prev + curr.speed, 0) / this.creatureCollection.count).toFixed(2)}
+                <br>average view radius: ${(this.creatureCollection.userData.creatureInfo.reduce((prev: any, curr: { viewRadius: any; }) => prev + curr.viewRadius, 0) / this.creatureCollection.count).toFixed(2)}
+                <br>average required reproduction food: ${(this.creatureCollection.userData.creatureInfo.reduce((prev: any, curr: { requiredReproductionFood: any; }) => prev + curr.requiredReproductionFood, 0) / this.creatureCollection.count).toFixed(2)}
                 `;
 
                 // set debug sphere position to radius of 1 in front of creature's facing direction
@@ -327,6 +378,8 @@ class SceneRenderer {
                 );
                 if (creatureInfo.isTargetingFood) {
                     this.debugSphere.material.color.set('green');
+                } else {
+                    this.debugSphere.material.color.set('yellow');
                 }
                 this.debugSphere.position.copy(debugPosition);
                 
@@ -344,6 +397,7 @@ class SceneRenderer {
             }
         
             this.creatureCollection.instanceMatrix.needsUpdate = true;
+            // this.foodCollection.instanceMatrix.needsUpdate = true;
         }
         
     }
